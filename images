@@ -1,1 +1,66 @@
+1. MetaData Table.jpg 📊
+This image shows the structure and initial data within the SQL Metadata Table (ADF_Metadata).
 
+Column	Significance in the Pipeline
+Table_ID	Used as the pipeline parameter to select a specific table for a job run.
+Table_Name	Dynamically read by the ADF Lookup Activity and passed to the Copy Source for dynamic SQL queries.
+Watermark_Column	Dynamically read and used in the Copy Source Query to filter the data.
+Last_Load_Date	The previous high watermark. This value is read by the Lookup Activity and passed to the Copy Source as the StartDate variable. The initial date (1900-01-01) ensures the very first run is a Full Load.
+
+Export to Sheets
+This table is the control center for managing the incremental state of all 13 source tables.
+
+2. ADF Pipeline.jpg ⚙️
+This image displays the high-level flow of the Child Pipeline in ADF.
+
+Flow: The pipeline clearly follows the execution order:
+
+Lookup Activity: Reads the metadata (Watermark, Table Name, Last Load Date).
+
+Set Variables: Sets StartDate, CurrentDate, TableName, and WatermarkColumn variables from the Lookup output and UTCnow() function.
+
+Copy Data Activity: Performs the actual data movement.
+
+Stored Procedure Activity: Updates the Last_Load_Date for the next run.
+
+Significance: This pipeline demonstrates the reusability of the design. By using dynamic parameters and variables, this single pipeline handles the incremental load for all 13 tables.
+
+3. Copy Source.jpg (or Load Files as DateTime Dynamically.jpg) 🔎
+This image showcases the configuration of the Copy Activity Source, which implements the core incremental logic.
+
+Settings: The source is configured to use a Query rather than a simple table name.
+
+Dynamic Content: The query utilizes the pipeline variables (@variables('TableName'), @variables('WatermarkColumn'), @variables('StartDate'), @variables('CurrentDate')) to construct a fully dynamic SQL statement:
+
+SQL
+
+SELECT * FROM @{variables('TableName')} 
+WHERE @{variables('WatermarkColumn')} > '@{variables('StartDate')}' 
+  AND @{variables('WatermarkColumn')} <= '@{variables('CurrentDate')}'
+Significance: This query precisely selects data only between the previous high watermark (StartDate) and the current execution time (CurrentDate), achieving true incremental extraction.
+
+4. Copy Sink.jpg 💾
+This image confirms the configuration of the Copy Activity Sink for loading data into Azure Blob Storage (Raw Layer).
+
+Dataset Path: The file path is configured using dynamic expressions to ensure the data lands in a structured format:
+
+Container/Folder: Based on the Table Name (e.g., raw/Order/).
+
+File Name: Based on the Current Date (e.g., Order_20251008.csv).
+
+File Naming Expression: The use of dynamic content like @variables('TableName') and @variables('CurrentDate') ensures the output structure is self-documenting and organized by the source table and the load time.
+
+Significance: This creates the Raw (Bronze) layer, using a standard convention for file naming (e.g., TableName/LoadDate/FileName).
+
+5. Update Store Procedure.jpg ⬆️
+This image shows the configuration of the Stored Procedure Activity, the final step for bookkeeping.
+
+Settings: It calls the pre-created UpdateWatermark stored procedure in the SQL Database.
+
+Parameter Mapping: It passes two critical parameters:
+
+@TableId: Mapped to the pipeline parameter @{pipeline().parameters.table_id}.
+
+@NewWatermarkDate: Mapped to the variable @{variables('CurrentDate')}.
+
+Significance: This activity persists the new high watermark. If the Copy Activity succeeded, this step updates the metadata, ensuring the next run reads the correct Last_Load_Date and avoids reprocessing old data.
